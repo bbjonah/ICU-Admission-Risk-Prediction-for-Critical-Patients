@@ -1,0 +1,346 @@
+# ============================================================
+# ICU Admission Risk Prediction for Critical Patients
+# ============================================================
+
+# Import Libraries
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+from sklearn.model_selection import train_test_split
+from sklearn.compose import ColumnTransformer
+from sklearn.pipeline import Pipeline
+from sklearn.impute import SimpleImputer
+from sklearn.preprocessing import OneHotEncoder, StandardScaler
+
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.metrics import (
+    accuracy_score,
+    classification_report,
+    confusion_matrix,
+    roc_auc_score,
+    roc_curve
+)
+
+import joblib
+
+# ============================================================
+# Load Dataset
+# ============================================================
+
+df = pd.read_csv("icu_admission_risk_prediction_dataset.csv")
+
+print("\nDataset Shape:")
+print(df.shape)
+
+print("\nFirst 5 Rows:")
+print(df.head())
+
+# ============================================================
+# Basic EDA
+# ============================================================
+
+print("\nDataset Information:")
+print(df.info())
+
+print("\nMissing Values:")
+print(df.isnull().sum())
+
+print("\nTarget Distribution:")
+print(df["ICU_Admission"].value_counts())
+
+# ============================================================
+# Feature Engineering
+# ============================================================
+
+# Shock Index
+df["Shock_Index"] = df["Heart_Rate"] / df["Systolic_BP"]
+
+# Comorbidity Count
+df["Comorbidity_Count"] = (
+    df["Diabetes"]
+    + df["Hypertension"]
+    + df["Chronic_Kidney_Disease"]
+    + df["Heart_Disease"]
+    + df["COPD"]
+    + df["Cancer"]
+)
+
+# High Risk Lactate Flag
+df["High_Lactate"] = np.where(df["Lactate"] > 4, 1, 0)
+
+# ============================================================
+# Define Features and Target
+# ============================================================
+
+X = df.drop(["Patient_ID", "ICU_Admission"], axis=1)
+
+y = df["ICU_Admission"]
+
+# ============================================================
+# Train-Test Split
+# ============================================================
+
+X_train, X_test, y_train, y_test = train_test_split(
+    X,
+    y,
+    test_size=0.20,
+    random_state=42,
+    stratify=y
+)
+
+print("\nTraining Shape:", X_train.shape)
+print("Testing Shape:", X_test.shape)
+
+# ============================================================
+# Identify Feature Types
+# ============================================================
+
+numeric_features = X.select_dtypes(
+    include=["int64", "float64"]
+).columns.tolist()
+
+categorical_features = X.select_dtypes(
+    include=["object"]
+).columns.tolist()
+
+# ============================================================
+# Preprocessing Pipelines
+# ============================================================
+
+numeric_transformer = Pipeline(
+    steps=[
+        ("imputer", SimpleImputer(strategy="median")),
+        ("scaler", StandardScaler())
+    ]
+)
+
+categorical_transformer = Pipeline(
+    steps=[
+        ("imputer", SimpleImputer(strategy="most_frequent")),
+        ("encoder", OneHotEncoder(handle_unknown="ignore"))
+    ]
+)
+
+preprocessor = ColumnTransformer(
+    transformers=[
+        ("num", numeric_transformer, numeric_features),
+        ("cat", categorical_transformer, categorical_features)
+    ]
+)
+
+# ============================================================
+# Random Forest Model
+# ============================================================
+
+rf_model = RandomForestClassifier(
+    n_estimators=300,
+    max_depth=10,
+    min_samples_split=5,
+    class_weight="balanced",
+    random_state=42
+)
+
+# ============================================================
+# Build Pipeline
+# ============================================================
+
+model = Pipeline(
+    steps=[
+        ("preprocessor", preprocessor),
+        ("classifier", rf_model)
+    ]
+)
+
+# ============================================================
+# Train Model
+# ============================================================
+
+print("\nTraining Model...")
+
+model.fit(X_train, y_train)
+
+print("Training Complete!")
+
+# ============================================================
+# Predictions
+# ============================================================
+
+y_pred = model.predict(X_test)
+
+y_prob = model.predict_proba(X_test)[:, 1]
+
+# ============================================================
+# Evaluation
+# ============================================================
+
+accuracy = accuracy_score(y_test, y_pred)
+
+roc_auc = roc_auc_score(y_test, y_prob)
+
+print("\n==============================")
+print("MODEL PERFORMANCE")
+print("==============================")
+
+print(f"Accuracy : {accuracy:.4f}")
+print(f"ROC AUC  : {roc_auc:.4f}")
+
+print("\nClassification Report:")
+print(classification_report(y_test, y_pred))
+
+# ============================================================
+# Confusion Matrix
+# ============================================================
+
+cm = confusion_matrix(y_test, y_pred)
+
+plt.figure(figsize=(6,5))
+sns.heatmap(
+    cm,
+    annot=True,
+    fmt='d',
+    cmap='Blues'
+)
+
+plt.title("Confusion Matrix")
+plt.xlabel("Predicted")
+plt.ylabel("Actual")
+plt.tight_layout()
+plt.show()
+
+# ============================================================
+# ROC Curve
+# ============================================================
+
+fpr, tpr, thresholds = roc_curve(y_test, y_prob)
+
+plt.figure(figsize=(8,6))
+
+plt.plot(
+    fpr,
+    tpr,
+    linewidth=2,
+    label=f"AUC = {roc_auc:.3f}"
+)
+
+plt.plot(
+    [0,1],
+    [0,1],
+    linestyle='--'
+)
+
+plt.xlabel("False Positive Rate")
+plt.ylabel("True Positive Rate")
+plt.title("ROC Curve")
+
+plt.legend()
+
+plt.show()
+
+# ============================================================
+# Feature Importance
+# ============================================================
+
+feature_names = model.named_steps[
+    "preprocessor"
+].get_feature_names_out()
+
+importances = model.named_steps[
+    "classifier"
+].feature_importances_
+
+importance_df = pd.DataFrame({
+    "Feature": feature_names,
+    "Importance": importances
+})
+
+importance_df = importance_df.sort_values(
+    by="Importance",
+    ascending=False
+)
+
+print("\nTop 20 Features")
+
+print(importance_df.head(20))
+
+plt.figure(figsize=(10,8))
+
+sns.barplot(
+    data=importance_df.head(20),
+    x="Importance",
+    y="Feature"
+)
+
+plt.title("Top 20 Important Features")
+plt.tight_layout()
+plt.show()
+
+# ============================================================
+# ICU Risk Prediction Function
+# ============================================================
+
+def predict_patient_risk(patient_data):
+
+    patient_df = pd.DataFrame([patient_data])
+
+    probability = model.predict_proba(patient_df)[0][1]
+
+    prediction = model.predict(patient_df)[0]
+
+    return {
+        "ICU_Admission_Prediction": int(prediction),
+        "Risk_Probability": round(probability, 4)
+    }
+
+# ============================================================
+# Example Prediction
+# ============================================================
+
+sample_patient = {
+    "Age": 78,
+    "Gender": "Male",
+    "BMI": 31.5,
+    "Heart_Rate": 135,
+    "Respiratory_Rate": 34,
+    "SpO2": 84,
+    "Systolic_BP": 85,
+    "Diastolic_BP": 55,
+    "Temperature_C": 39.4,
+    "WBC_Count": 18,
+    "Hemoglobin": 10.5,
+    "Platelet_Count": 160,
+    "Blood_Glucose": 210,
+    "Creatinine": 2.8,
+    "Lactate": 5.6,
+    "CRP": 140,
+    "Diabetes": 1,
+    "Hypertension": 1,
+    "Chronic_Kidney_Disease": 1,
+    "Heart_Disease": 1,
+    "COPD": 0,
+    "Cancer": 0,
+    "Glasgow_Coma_Scale": 8,
+    "Early_Warning_Score": 10,
+    "Sepsis_Indicator": 1,
+    "Admission_Type": "Emergency",
+    "Shock_Index": 135 / 85,
+    "Comorbidity_Count": 4,
+    "High_Lactate": 1
+}
+
+result = predict_patient_risk(sample_patient)
+
+print("\nSample Prediction:")
+print(result)
+
+# ============================================================
+# Save Model
+# ============================================================
+
+joblib.dump(
+    model,
+    "icu_admission_prediction_model.pkl"
+)
+
+print("\nModel saved successfully!")
